@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { useBotStore } from "@/lib/store";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -129,10 +130,12 @@ function Field({
   onChange: (n: number) => void;
   min?: number;
 }) {
+  const id = useId();
   return (
     <div className="space-y-1">
-      <Label className="text-xs">{label}</Label>
+      <Label htmlFor={id} className="text-xs">{label}</Label>
       <Input
+        id={id}
         type="number"
         min={min}
         value={value}

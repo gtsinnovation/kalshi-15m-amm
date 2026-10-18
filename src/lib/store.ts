@@ -203,6 +203,8 @@ interface BotState {
 
   balance: number;
   setBalance: (b: number) => void;
+  portfolioValue: number;
+  setPortfolioValue: (value: number) => void;
 
   btcSpot: number;
   setBtcSpot: (s: number) => void;
@@ -387,10 +389,8 @@ export const useBotStore = create<BotState>()(
           const expiredTrackedCount = tracked.length - survivingTracked.length;
           let nextTracked = tracked;
           if (expiredTrackedCount > 0 || (tracked.length > 0 && survivingTracked.length === 0)) {
-            const newlyListed = m
-              .map((x) => x.ticker)
-              .filter((t) => !prevTickers.has(t) && !survivingTracked.includes(t));
-            nextTracked = Array.from(new Set([...survivingTracked, ...newlyListed]));
+            // A new market requires an explicit selection and risk review.
+            nextTracked = survivingTracked;
           } else if (survivingTracked.length !== tracked.length) {
             nextTracked = survivingTracked;
           }
@@ -457,6 +457,8 @@ export const useBotStore = create<BotState>()(
 
       balance: 0,
       setBalance: (b) => set({ balance: b }),
+      portfolioValue: 0,
+      setPortfolioValue: (value) => set({ portfolioValue: value }),
 
       btcSpot: 0,
       setBtcSpot: (s) => set({ btcSpot: s }),
@@ -672,6 +674,7 @@ export const useBotStore = create<BotState>()(
         return {
           ...current,
           ...p,
+          risk: { ...current.risk, ...(p.risk ?? {}) },
           strategy: {
             ...current.strategy,
             ...(p.strategy ?? {}),

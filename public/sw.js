@@ -26,7 +26,7 @@ self.addEventListener("activate", (event) => {
     (async () => {
       const names = await caches.keys();
       await Promise.all(
-        names.filter((n) => n !== SHELL_CACHE).map((n) => caches.delete(n)),
+        names.filter((n) => n.startsWith("k15m-shell-") && n !== SHELL_CACHE).map((n) => caches.delete(n)),
       );
       await self.clients.claim();
     })(),
@@ -62,7 +62,8 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       (async () => {
         try {
-          const fresh = await fetch(request);
+          const fresh = await fetch(request, { signal: AbortSignal.timeout(5000) });
+          if (!fresh.ok) throw new Error("Navigation failed");
           const cache = await caches.open(SHELL_CACHE);
           cache.put("/index.html", fresh.clone()).catch(() => {});
           return fresh;

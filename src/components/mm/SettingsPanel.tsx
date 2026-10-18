@@ -19,7 +19,7 @@ import {
 } from "@/lib/kalshi/pem";
 import { encryptPem, forgetSessionPassphrase, rememberPassphraseForSession } from "@/lib/security/vault";
 import { pause } from "@/lib/scheduler/loop";
-import { clearAuditLog } from "@/lib/audit/logStore";
+import { clearTickerMismatches, clearAuditLog } from "@/lib/audit/logStore";
 import { clearRiskAcceptance } from "@/components/RiskDisclaimerGate";
 
 /**
@@ -42,7 +42,7 @@ const credentialsSchema = z.object({
     .trim()
     .min(8, "Key ID looks too short")
     .max(128, "Key ID looks too long")
-    .regex(/^[A-Za-z0-9_\-]+$/, "Key ID may only contain letters, digits, _ and -"),
+    .regex(/^[A-Za-z0-9_-]+$/, "Key ID may only contain letters, digits, _ and -"),
   env: z.enum(["demo", "prod"]),
   proxy: proxySchema,
 });
@@ -64,7 +64,7 @@ export function SettingsPanel() {
     setReloadMinutesInput((marketReloadMinutes ?? [0, 16, 31, 45]).join(", "));
   }, [marketReloadMinutes]);
   const [keyId, setKeyId] = useState(credentials?.keyId ?? "");
-  const [pem, setPem] = useState(credentials?.privateKeyPem ?? "");
+  const [pem, setPem] = useState("");
   const [proxy, setProxy] = useState(credentials?.corsProxy ?? encryptedCredentials?.corsProxy ?? CLOUD_PROXY);
   const [env, setEnv] = useState<KalshiEnv>(credentials?.env ?? encryptedCredentials?.env ?? "demo");
   const [testing, setTesting] = useState(false);
@@ -110,6 +110,10 @@ export function SettingsPanel() {
     !pem.trim() && !!encryptedCredentials && !!credentials;
 
   const save = async () => {
+    if (useBotStore.getState().runState === "running") {
+      toast.error("Stop the bot before changing credentials or environment");
+      return;
+    }
     const parsed = credentialsSchema.safeParse({ keyId, env, proxy });
     if (!parsed.success) {
       toast.error(parsed.error.issues[0]?.message ?? "Invalid input");
@@ -146,8 +150,10 @@ export function SettingsPanel() {
       toast.error("Paste your RSA private key (PEM) to (re-)encrypt the vault");
       return;
     }
-    if (pemCheck && !pemCheck.ok) {
-      toast.error(`PEM invalid: ${pemCheck.label}`, { description: pemCheck.detail });
+    const pemSnapshot = pem.trim();
+    const checkedPem = await validatePem(pemSnapshot);
+    if (!checkedPem.ok) {
+      toast.error(`PEM invalid: ${checkedPem.label}`, { description: checkedPem.detail });
       return;
     }
     const passResult = z
@@ -165,7 +171,7 @@ export function SettingsPanel() {
     }
     setSaving(true);
     try {
-      const cipher = await encryptPem(pem.trim(), passphrase);
+      const cipher = await encryptPem(pemSnapshot, passphrase);
       setEncryptedCredentials({
         v: 1,
         keyId: keyId.trim(),
@@ -173,7 +179,7 @@ export function SettingsPanel() {
         corsProxy: proxy.trim(),
         pemCipher: cipher,
       });
-      setCredentials({ keyId: keyId.trim(), privateKeyPem: pem.trim(), env, corsProxy: proxy.trim() });
+      setCredentials({ keyId: keyId.trim(), privateKeyPem: pemSnapshot, env, corsProxy: proxy.trim() });
       rememberPassphraseForSession(passphrase);
       setVaultLocked(false);
       setPassphrase("");
@@ -188,6 +194,9 @@ export function SettingsPanel() {
   };
 
   const lockNow = () => {
+    setPem("");
+    setPassphrase("");
+    setPassphrase2("");
     pause();
     forgetSessionPassphrase();
     setCredentials(null);
@@ -264,7 +273,7 @@ export function SettingsPanel() {
     pause();
     forgetSessionPassphrase();
     try { await supabase.auth.signOut(); } catch { /* ignore */ }
-    try { await clearAuditLog(); } catch { /* ignore */ }
+    try { await clearAuditLog(); await clearTickerMismatches(); } catch { /* ignore */ }
     clearRiskAcceptance();
     try {
       localStorage.removeItem("kalshi-mm-store");

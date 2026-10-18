@@ -1,4 +1,5 @@
 import { signRequest } from "./signer";
+import { normalizeOrder, normalizePosition } from "./normalize";
 import { supabase } from "@/integrations/supabase/client";
 import type {
   KalshiBalance,
@@ -61,7 +62,7 @@ function isBtc15MinMarket(m: import("./types").KalshiMarket): boolean {
 }
 
 export class KalshiClient {
-  constructor(private creds: KalshiCredentials) {}
+  constructor(private creds: KalshiCredentials, private mayMutate: () => boolean = () => true) {}
 
   private buildUrl(path: string): string {
     const fullUrl = `${BASE_URLS[this.creds.env]}${path}`;
@@ -136,8 +137,10 @@ export class KalshiClient {
       }
       let res: Response;
       try {
-        res = await fetch(url, { method, headers, body: serializedBody });
+        if (method === "POST" && !this.mayMutate()) throw new Error("Trading authority revoked");
+        res = await fetch(url, { method, headers, body: serializedBody, signal: AbortSignal.timeout(15000) });
       } catch (e) {
+        if (method === "POST" && !this.mayMutate()) throw e;
         lastErr = e;
         // Network error — backoff and retry.
         await sleep(backoffMs(attempt));
@@ -237,21 +240,32 @@ export class KalshiClient {
   }
 
   async getPositions(): Promise<KalshiPosition[]> {
-    const r = await this.request<{ market_positions: KalshiPosition[] }>(
-      "GET",
-      "/portfolio/positions"
-    );
-    return r.market_positions ?? [];
+    return (await this.listAll("/portfolio/positions", "market_positions")).map(normalizePosition);
   }
 
   async getOpenOrders(ticker?: string): Promise<KalshiOrder[]> {
     const q = new URLSearchParams({ status: "resting" });
     if (ticker) q.set("ticker", ticker);
-    const r = await this.request<{ orders: KalshiOrder[] }>(
-      "GET",
-      `/portfolio/orders?${q.toString()}`
-    );
-    return r.orders ?? [];
+    return (await this.listAll(`/portfolio/orders?${q.toString()}`, "orders")).map(normalizeOrder);
+  }
+
+  private async listAll(path: string, key: string): Promise<Record<string, unknown>[]> {
+    const result: Record<string, unknown>[] = [];
+    const seen = new Set<string>();
+    let cursor = "";
+    for (let page = 0; page < 1000; page++) {
+      const queryPath = cursor ? `${path}${path.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}` : path;
+      const response = await this.request<Record<string, unknown>>("GET", queryPath);
+      const rows = response[key];
+      if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== "object")) throw new Error(`Invalid ${key} response`);
+      result.push(...rows);
+      const next = response.cursor;
+      if (next == null || next === "") return result;
+      if (typeof next !== "string" || seen.has(next)) throw new Error("Invalid or repeated pagination cursor");
+      seen.add(next);
+      cursor = next;
+    }
+    throw new Error("Pagination safety limit reached; snapshot incomplete");
   }
 
   placeOrder(params: {
@@ -263,6 +277,9 @@ export class KalshiClient {
     no_price?: number;
     type?: "limit" | "market";
     client_order_id?: string;
+    post_only?: boolean;
+    expiration_ts?: number;
+    reduce_only?: boolean;
   }): Promise<{ order: KalshiOrder }> {
     const type = params.type ?? "limit";
     // Kalshi requires *exactly one* of yes_price / no_price for limit orders,
@@ -275,6 +292,9 @@ export class KalshiClient {
       action: params.action,
       count: params.count,
       type,
+      ...(params.post_only != null ? { post_only: params.post_only } : {}),
+      ...(params.expiration_ts != null ? { expiration_ts: params.expiration_ts } : {}),
+      ...(params.reduce_only != null ? { reduce_only: params.reduce_only } : {}),
       client_order_id: params.client_order_id ?? crypto.randomUUID(),
     };
     if (type === "limit") {
@@ -296,18 +316,16 @@ export class KalshiClient {
     const q = new URLSearchParams({ limit: String(opts?.limit ?? 100) });
     if (opts?.ticker) q.set("ticker", opts.ticker);
     if (opts?.min_ts) q.set("min_ts", String(Math.floor(opts.min_ts / 1000)));
-    const r = await this.request<{ fills: KalshiFill[] }>(
-      "GET",
-      `/portfolio/fills?${q.toString()}`
-    );
-    return r.fills ?? [];
+    return await this.listAll(`/portfolio/fills?${q.toString()}`, "fills") as unknown as KalshiFill[];
   }
 }
 
 export async function fetchBtcSpot(): Promise<number> {
   // Coinbase public ticker — no auth, public CORS-friendly endpoint.
-  const res = await fetch("https://api.coinbase.com/v2/prices/BTC-USD/spot");
-  if (!res.ok) throw new Error("Coinbase spot fetch failed");
+  const res = await fetch("https://api.coinbase.com/v2/prices/BTC-USD/spot", { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`Coinbase spot fetch failed: ${res.status}`);
   const j = (await res.json()) as { data: { amount: string } };
-  return parseFloat(j.data.amount);
+  const price = Number(j.data.amount);
+  if (!Number.isFinite(price) || price <= 0) throw new Error("Invalid BTC spot price");
+  return price;
 }

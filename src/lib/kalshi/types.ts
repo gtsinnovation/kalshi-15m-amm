@@ -77,5 +77,6 @@ export interface KalshiFill {
 
 export interface KalshiBalance {
   balance: number;
+  portfolio_value: number;
   payout: number;
 }

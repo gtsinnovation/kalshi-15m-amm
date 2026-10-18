@@ -65,7 +65,7 @@ export default function Backtest() {
 
   const drawdownCurve = useMemo(() => {
     if (equityCurve.length === 0) return [];
-    let peak = equityCurve[0].equity;
+    let peak = 0;
     return equityCurve.map((p) => {
       if (p.equity > peak) peak = p.equity;
       return { ts: p.ts, drawdown: -(peak - p.equity) };
@@ -116,11 +116,11 @@ export default function Backtest() {
         <title>Backtest — K15M AMM Kalshi BTC Strategy Replay</title>
         <meta
           name="description"
-          content="Replay historical 15-minute Kalshi BTC cycles against your current Avellaneda–Stoikov parameters. Reports P&L, max drawdown, and hit rate."
+          content="Synthetic pricing demonstration using BTC candles. Does not validate historical Kalshi execution or strategy profitability."
         />
         <link rel="canonical" href="https://k15mamm.webpwa.io/backtest" />
         <meta property="og:title" content="Backtest — K15M AMM" />
-        <meta property="og:description" content="Replay historical Kalshi BTC cycles against the current strategy." />
+        <meta property="og:description" content="Synthetic pricing demonstration; not a replay of historical Kalshi orders or fills." />
         <meta property="og:url" content="https://k15mamm.webpwa.io/backtest" />
       </Helmet>
       <header className="border-b border-border bg-card/50 backdrop-blur">

@@ -165,15 +165,18 @@ export function actualReservedFromOpenOrders(
   const perTicker: Record<string, number> = {};
   let totalCents = 0;
   for (const o of orders) {
-    const priceCents = (o.yes_price ?? o.no_price ?? 0) | 0;
+    const priceCents = o.side === "yes" ? o.yes_price : o.no_price;
+    if (!Number.isFinite(priceCents) || !Number.isFinite(o.count) || o.count < 0) {
+      throw new Error("Invalid order collateral input");
+    }
     const reservedCents =
-      o.action === "buy" ? priceCents * o.count : (100 - priceCents) * o.count;
+      o.action === "buy" ? priceCents! * o.count : (100 - priceCents!) * o.count;
     perOrder.push({
       ticker: o.ticker,
       orderId: o.order_id,
       side: o.side,
       action: o.action,
-      priceCents,
+      priceCents: priceCents!,
       count: o.count,
       reservedCents,
     });

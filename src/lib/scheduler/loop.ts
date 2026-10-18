@@ -26,6 +26,7 @@ function errorMessage(error: unknown): string {
 
 let timer: number | null = null;
 let ticking = false;
+let runGeneration = 0;
 
 /** Per-ticker mutex to prevent overlapping quote operations. */
 const tickerLocks = new Set<string>();
@@ -39,20 +40,7 @@ async function makeClientId(
   priceCents: number,
   size: number,
 ): Promise<string> {
-  // Kalshi requires client_order_id to be a UUID. We derive a deterministic
-  // UUID-v4-shaped value from (ticker, side, price, size, minute-bucket) via
-  // SHA-256 so duplicate submissions within the same bucket get the same id
-  // and Kalshi rejects them as duplicates (hard idempotency).
-  const bucket = Math.floor(Date.now() / 60_000);
-  const seed = `mm|${ticker}|${side}|${priceCents}|${size}|${bucket}`;
-  const buf = new Uint8Array(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(seed)),
-  );
-  // Format as UUID v4 (set version=4 and variant=10xx).
-  buf[6] = (buf[6] & 0x0f) | 0x40;
-  buf[8] = (buf[8] & 0x3f) | 0x80;
-  const h = Array.from(buf.slice(0, 16), (b) => b.toString(16).padStart(2, "0")).join("");
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+  return crypto.randomUUID();
 }
 
 async function waitForCancels(client: KalshiClient, ticker: string, maxWaitMs = 3000): Promise<boolean> {
@@ -78,6 +66,7 @@ async function refreshMarkets(client: KalshiClient) {
       .log("info", `loaded ${markets.length} BTC 15-min markets`);
   } catch (e) {
     useBotStore.getState().log("warn", `refreshMarkets: ${errorMessage(e)}`);
+    throw e;
   }
 }
 
@@ -86,9 +75,11 @@ async function syncAccount(client: KalshiClient) {
     const [bal, positions, openOrders] = await Promise.all([
       client.getBalance(),
       client.getPositions(),
-      client.getOpenOrders().catch(() => []),
+      client.getOpenOrders(),
     ]);
+    if (![bal.balance, bal.portfolio_value].every(Number.isFinite)) throw new Error("Invalid cash or portfolio value");
     useBotStore.getState().setBalance(bal.balance / 100);
+    useBotStore.getState().setPortfolioValue(bal.portfolio_value / 100);
     useBotStore.getState().setPositions(positions);
     const snap = actualReservedFromOpenOrders(openOrders);
     useBotStore.getState().setActualReserved({
@@ -99,6 +90,7 @@ async function syncAccount(client: KalshiClient) {
     });
   } catch (e) {
     useBotStore.getState().log("warn", `syncAccount: ${errorMessage(e)}`);
+    throw e;
   }
 }
 
@@ -186,7 +178,10 @@ async function pollFills(client: KalshiClient) {
         resolvedTicker,
       );
       // Mark the order as filled in the ledger (releases collateral row).
-      const { mismatch } = s.closeOrderLedger(f.order_id, "filled", price, fillTickerRaw ?? undefined);
+      const complete = !!ledgerEntry && count === ledgerEntry.size;
+      const { mismatch } = complete
+        ? s.closeOrderLedger(f.order_id, "filled", price, fillTickerRaw ?? undefined)
+        : { mismatch: !!(fillTickerRaw && expectedTicker && fillTickerRaw !== expectedTicker) };
       if (mismatch) {
         s.log(
           "warn",
@@ -239,7 +234,8 @@ async function quoteMarket(
   // buffer so we don't race the closing tick.
   const CLOSE_BUFFER_SEC = 15;
   const closeMs = market.close_time ? new Date(market.close_time).getTime() : 0;
-  if (closeMs > 0 && closeMs - Date.now() <= CLOSE_BUFFER_SEC * 1000) {
+  if (!Number.isFinite(closeMs) || closeMs <= 0) throw new Error("Missing or invalid market close time");
+  if (closeMs - Date.now() <= CLOSE_BUFFER_SEC * 1000) {
     s.log(
       "info",
       `market closed or closing within ${CLOSE_BUFFER_SEC}s — skipping quote`,
@@ -428,6 +424,8 @@ async function quoteMarket(
   let releasedCents = 0;
   try {
     const open = await client.getOpenOrders(market.ticker);
+    const owned = new Set(s.orderLedger.map(e => e.orderId));
+    if (open.some(o => !owned.has(o.order_id))) throw new Error("Unrecognized resting order; review exchange state before quoting");
     for (const o of open) {
       const price = o.yes_price ?? o.no_price ?? 0;
       if (o.action === "buy") releasedCents += price * o.count;
@@ -447,6 +445,7 @@ async function quoteMarket(
       ),
     );
     cancelledCount = results.filter((r) => r.status === "fulfilled").length;
+    if (results.some(r => r.status === "rejected")) throw new Error("Cancellation failed; no replacement permitted");
     if (cancelledCount > 0 && releasedCents > 0) {
       s.log(
         "info",
@@ -456,6 +455,7 @@ async function quoteMarket(
     }
   } catch (e) {
     s.log("warn", `cancel: ${(e as Error).message}`, market.ticker);
+    throw e;
   }
 
   if (cancelledCount > 0) {
@@ -466,18 +466,26 @@ async function quoteMarket(
     }
   }
 
-  // Per-market position-cap check applied to YES legs (NO legs mirror YES
-  // economically and are gated by the same cap).
+  // A single YES pair avoids duplicate directional exposure from mirrored legs.
   const canBuy = pos + size <= s.risk.perMarketPositionCap;
   const canSell = pos - size >= -s.risk.perMarketPositionCap;
   if (!canBuy || !canSell) {
     s.log(
       "warn",
-      `position cap would block ${!canBuy ? "buy" : "sell"} side — blocking full 4-leg quote (pos=${pos}, cap=${s.risk.perMarketPositionCap})`,
+      `position cap would block ${!canBuy ? "buy" : "sell"} side — blocking quote pair (pos=${pos}, cap=${s.risk.perMarketPositionCap})`,
       market.ticker,
     );
     return;
   }
+
+  const accountOpen = await client.getOpenOrders();
+  const reservation = reservedForQuote(quote.bidCents, quote.askCents, size, pos).totalReservedCents;
+  const reserved = actualReservedFromOpenOrders(accountOpen).totalCents;
+  const positionExposure = Object.values(useBotStore.getState().positions).reduce((total, p) => total + Math.abs(p.position) * 100, 0);
+  if (![reservation, reserved, positionExposure, s.balance].every(Number.isFinite)) throw new Error("Unknown exposure or balance");
+  if (s.risk.maxOpenOrders > 0 && accountOpen.length + 2 > s.risk.maxOpenOrders) throw new Error("Prospective open-order limit exceeded");
+  if (positionExposure + reserved + reservation > s.risk.globalDollarExposureCap * 100) throw new Error("Global exposure limit exceeded");
+  if (s.balance <= 0 || reservation > s.balance * s.risk.collateralSafetyPct) throw new Error("Collateral safety budget exceeded");
 
   type Leg = {
     label: string;
@@ -490,8 +498,7 @@ async function quoteMarket(
   const legs: Leg[] = [
     { label: "YES BID", contractSide: "yes", action: "buy",  priceCents: quote.bidCents, ledgerSide: "bid", bookSide: "bid" },
     { label: "YES ASK", contractSide: "yes", action: "sell", priceCents: quote.askCents, ledgerSide: "ask", bookSide: "ask" },
-    { label: "NO BID",  contractSide: "no",  action: "buy",  priceCents: noBidCents,     ledgerSide: "bid", bookSide: "bid" },
-    { label: "NO ASK",  contractSide: "no",  action: "sell", priceCents: noAskCents,     ledgerSide: "ask", bookSide: "ask" },
+
   ];
 
   let yesBidOrderId: string | undefined;
@@ -499,6 +506,7 @@ async function quoteMarket(
   let yesBidClientId: string | undefined;
   let yesAskClientId: string | undefined;
 
+  const acceptedOrderIds: string[] = [];
   try {
     for (const leg of legs) {
       const clientId = await makeClientId(
@@ -517,11 +525,17 @@ async function quoteMarket(
           count: size,
           type: "limit",
           client_order_id: clientId,
+          post_only: true,
+          expiration_ts: Math.floor(Math.min(Date.now() + 30_000, closeMs - 15_000) / 1000),
         };
         if (leg.contractSide === "yes") orderArgs.yes_price = leg.priceCents;
         else orderArgs.no_price = leg.priceCents;
         const r = await client.placeOrder(orderArgs);
         const orderId = r.order?.order_id;
+        if (!orderId) throw new Error("Order accepted without a reconcilable ID");
+        acceptedOrderIds.push(orderId);
+        const current = useBotStore.getState();
+        if (current.runState !== "running" || current.credentials !== s.credentials) throw new Error("Trading stopped during placement");
         const reservedCents =
           leg.action === "buy"
             ? leg.priceCents * size
@@ -564,7 +578,7 @@ async function quoteMarket(
     const deltaSign = deltaCents > 0 ? "+" : deltaCents < 0 ? "−" : "±";
     s.log(
       "quote",
-      `YES[${quote.bidCents}/${quote.askCents}] NO[${noBidCents}/${noAskCents}] × ${size} (fv ${(quote.fairValue * 100).toFixed(1)}¢) · reserves ${fmtUsd(newReserved.totalReservedCents)} (Δ ${deltaSign}${fmtUsd(Math.abs(deltaCents))})`,
+      `YES[${quote.bidCents}/${quote.askCents}] × ${size} (fv ${(quote.fairValue * 100).toFixed(1)}¢) · estimated reserves ${fmtUsd(newReserved.totalReservedCents)} (Δ ${deltaSign}${fmtUsd(Math.abs(deltaCents))})`,
       market.ticker,
     );
 
@@ -581,6 +595,11 @@ async function quoteMarket(
     s.setLastQuote(market.ticker, lastQ);
   } catch (e) {
     s.log("error", `placeOrder: ${(e as Error).message}`, market.ticker);
+    for (const orderId of acceptedOrderIds) {
+      try { await client.cancelOrder(orderId); s.closeOrderLedger(orderId, "cancelled"); }
+      catch { s.log("error", `Unresolved live order: ${orderId}; inspect the exchange`, market.ticker); }
+    }
+    throw e;
   }
 
   const mq: MarketQuote = {
@@ -608,7 +627,13 @@ async function tick() {
     ticking = false;
     return;
   }
-  const client = new KalshiClient(s.credentials);
+  const generation = runGeneration;
+  const credentials = s.credentials;
+  const authorized = () => {
+    const current = useBotStore.getState();
+    return generation === runGeneration && current.runState === "running" && current.credentials === credentials;
+  };
+  const client = new KalshiClient(credentials, authorized);
   try {
     s.setLastTickAt(Date.now());
 
@@ -618,6 +643,7 @@ async function tick() {
       s.setBtcSpot(spot);
     } catch (e) {
       s.log("warn", `spot: ${(e as Error).message}`);
+      throw e;
     }
 
     // Refresh markets every tick so the book (yes_bid/yes_ask) shown in
@@ -627,26 +653,23 @@ async function tick() {
     await syncAccount(client);
     await pollFills(client);
 
+    if (!authorized()) return;
     const spot = useBotStore.getState().btcSpot;
     const tracked = useBotStore.getState().trackedTickers;
     const markets = useBotStore.getState().markets.filter((m) => tracked.includes(m.ticker));
-
-    if (spot > 0) {
-      for (const m of markets) {
-        await quoteMarket(client, m, spot);
-      }
-    }
 
     // Push P&L snapshot
     const st = useBotStore.getState();
     const positions = Object.values(st.positions);
     const realized = positions.reduce((acc, p) => acc + p.realized_pnl / 100, 0);
-    const equity = st.balance + realized;
+    const equity = st.balance + st.portfolioValue;
+    if (!Number.isFinite(equity) || !Number.isFinite(realized)) throw new Error("Invalid equity snapshot");
+    if (st.sessionStartEquity === 0) st.setSessionStartEquity(equity);
     st.pushPnl({ ts: Date.now(), realized, unrealized: 0, equity });
 
     // Daily stop-loss
-    if (st.sessionStartEquity > 0) {
-      const dayPnl = equity - st.sessionStartEquity;
+    if (useBotStore.getState().sessionStartEquity > 0) {
+      const dayPnl = equity - useBotStore.getState().sessionStartEquity;
       if (dayPnl <= -st.risk.dailyStopLossDollars) {
         st.log("error", `daily stop-loss hit (${dayPnl.toFixed(2)})`);
         st.setCircuitBreakerTrip({
@@ -656,7 +679,7 @@ async function tick() {
           limitDollars: st.risk.dailyStopLossDollars,
           ts: Date.now(),
         });
-        await killAll(true);
+        await killAll(st.risk.autoFlattenOnStop);
       }
     }
 
@@ -720,7 +743,7 @@ async function tick() {
             limitDollars: limit,
             ts: Date.now(),
           });
-          await killAll(true);
+          await killAll(st.risk.autoFlattenOnStop);
         }
       }
       st.setCycleSnapshot(equity, currentCycleStart);
@@ -737,7 +760,14 @@ async function tick() {
           limitDollars: st.risk.intraCycleDrawdownDollars,
           ts: Date.now(),
         });
-        await killAll(true);
+        await killAll(st.risk.autoFlattenOnStop);
+      }
+    }
+    // Loss checks run before adding exposure. A stop invalidates this run.
+    if (spot > 0) {
+      for (const m of markets) {
+        if (!authorized()) return;
+        await quoteMarket(client, m, spot);
       }
     }
     // Tick completed without throwing — clear watchdog error streak.
@@ -814,6 +844,8 @@ function subscribeTrackedRollover() {
 }
 
 export function start() {
+  if (ticking) { useBotStore.getState().log("warn", "Wait for the previous tick to finish before restarting"); return; }
+  runGeneration++;
   const s = useBotStore.getState();
   if (!s.credentials) {
     s.log("error", "Cannot start: credentials missing");
@@ -823,7 +855,6 @@ export function start() {
     s.log("error", "Cannot start: circuit breaker tripped — re-arm first");
     return;
   }
-  if (s.sessionStartEquity === 0) s.setSessionStartEquity(s.balance);
   s.resetCycleStats();
   s.setRunState("running");
   s.log("info", "Bot started");
@@ -835,6 +866,7 @@ export function start() {
 }
 
 export function pause() {
+  runGeneration++;
   const s = useBotStore.getState();
   s.setRunState("paused");
   s.log("info", "Bot paused");
@@ -845,6 +877,7 @@ export function pause() {
 }
 
 export async function killAll(flatten: boolean) {
+  runGeneration++;
   const s = useBotStore.getState();
   if (timer != null) {
     window.clearInterval(timer);
@@ -862,18 +895,22 @@ export async function killAll(flatten: boolean) {
       if (o.action === "buy") killReleasedCents += price * o.count;
       else killReleasedCents += (100 - price) * o.count;
     }
+    let failedCancels = 0;
     await mapLimit(open, CANCEL_CONCURRENCY, async (o) => {
       try {
         await client.cancelOrder(o.order_id);
         s.closeOrderLedger(o.order_id, "cancelled");
       } catch {
-        // swallow per-order errors; kill switch is best-effort
+        failedCancels++;
+        s.log("error", `Unresolved cancellation: ${o.order_id}`);
       }
     });
     s.log(
       "info",
-      `cancelled ${open.length} open orders → released ${fmtUsd(killReleasedCents)} of collateral`
+      `Cancellation results: ${open.length - failedCancels} succeeded, ${failedCancels} failed; verify exchange balances`
     );
+    const remaining = await client.getOpenOrders();
+    if (failedCancels || remaining.length) throw new Error("Unresolved orders remain; flatten blocked");
     if (flatten) {
       const positions = await client.getPositions();
       for (const p of positions) {
@@ -885,11 +922,16 @@ export async function killAll(flatten: boolean) {
             side: "yes",
             action,
             count: Math.abs(p.position),
-            type: "market",
+            type: "limit",
+            yes_price: action === "sell" ? 1 : 99,
+            reduce_only: true,
+            expiration_ts: Math.floor(Date.now() / 1000) + 15,
           })
-          .catch((e) => s.log("error", `flatten: ${e.message}`, p.ticker));
+          .catch((e) => { s.log("error", `flatten: ${e.message}`, p.ticker); throw e; });
       }
-      s.log("info", "Positions flattened");
+      const residual = await client.getPositions();
+      if (residual.some(p => p.position !== 0)) throw new Error("Flatten incomplete; positions remain");
+      s.log("info", "Positions confirmed flat");
     }
   } catch (e) {
     s.log("error", `kill: ${(e as Error).message}`);

@@ -1,3 +1,4 @@
+import { useIdleLock } from "@/lib/security/useIdleLock";
 import { useEffect, useState, lazy, Suspense } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
@@ -84,7 +85,9 @@ const GatedCredentials = gatedPage(Credentials, "Loading credentials…");
 const GatedAudit = gatedPage(Audit, "Loading audit log…");
 const GatedBacktest = gatedPage(Backtest, "Loading backtester…");
 
-const App = () => (
+const App = () => {
+  useIdleLock();
+  return (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <Toaster />
@@ -116,6 +119,7 @@ const App = () => (
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
-);
+  );
+};
 
 export default App;

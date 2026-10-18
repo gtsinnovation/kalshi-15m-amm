@@ -96,13 +96,14 @@ Deno.serve(async (req) => {
       init.body = await req.text();
     }
 
-    const upstream = await fetch(`${base}${target}`, init);
+    const upstream = await fetch(`${base}${target}`, { ...init, signal: AbortSignal.timeout(15000), redirect: "error" });
     const body = await upstream.text();
     return new Response(body, {
       status: upstream.status,
       headers: {
         ...corsHeaders,
         "Content-Type": upstream.headers.get("content-type") ?? "application/json",
+        ...(upstream.headers.has("retry-after") ? { "Retry-After": upstream.headers.get("retry-after")!, "Access-Control-Expose-Headers": "Retry-After" } : {}),
       },
     });
   } catch (e) {

@@ -90,14 +90,10 @@ export async function decryptPem(blobB64: string, passphrase: string): Promise<s
   }
 }
 
-/** Session-only passphrase cache so the user only types it once per browser session. */
+/** Compatibility helpers: never persist a vault passphrase. Clear legacy caches. */
 const SESSION_KEY = "kalshi-mm-vault-pass";
-export function rememberPassphraseForSession(p: string) {
-  try { sessionStorage.setItem(SESSION_KEY, p); } catch { /* ignore */ }
-}
-export function getSessionPassphrase(): string | null {
-  try { return sessionStorage.getItem(SESSION_KEY); } catch { return null; }
-}
 export function forgetSessionPassphrase() {
-  try { sessionStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+  try { sessionStorage.removeItem(SESSION_KEY); } catch { /* storage unavailable */ }
 }
+export function rememberPassphraseForSession(_passphrase: string) { forgetSessionPassphrase(); }
+export function getSessionPassphrase(): null { forgetSessionPassphrase(); return null; }

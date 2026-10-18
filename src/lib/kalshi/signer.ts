@@ -22,10 +22,7 @@ function bufToBase64(buf: ArrayBuffer): string {
   return btoa(s);
 }
 
-let cachedKey: { pem: string; key: CryptoKey } | null = null;
-
 async function importKey(pem: string): Promise<CryptoKey> {
-  if (cachedKey && cachedKey.pem === pem) return cachedKey.key;
   const buf = pemToArrayBuffer(pem);
   const key = await crypto.subtle.importKey(
     "pkcs8",
@@ -34,7 +31,6 @@ async function importKey(pem: string): Promise<CryptoKey> {
     false,
     ["sign"]
   );
-  cachedKey = { pem, key };
   return key;
 }
 

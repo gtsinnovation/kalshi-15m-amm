@@ -86,7 +86,7 @@ function resolve(args: {
       tone: "destructive",
       icon: XOctagon,
       title: "Bot killed",
-      reason: "Kill switch was activated. All resting orders were cancelled. Re-start from the control bar to resume.",
+      reason: "Kill requested. Check the activity log and exchange for unresolved orders or positions before restarting.",
     };
   }
 
@@ -113,7 +113,7 @@ function resolve(args: {
       tone: "warning",
       icon: PauseCircle,
       title: "Bot paused — vault unlocked",
-      reason: "The market-making loop is stopped but credentials are loaded. Press Start to resume quoting.",
+      reason: "New quoting is paused. Resting exchange orders may still fill; use Kill Switch to withdraw orders.",
     };
   }
 

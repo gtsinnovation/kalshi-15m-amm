@@ -14,7 +14,6 @@ import { SettingsPanel } from "@/components/mm/SettingsPanel";
 import { CollateralPanel } from "@/components/mm/CollateralPanel";
 import { OrderLedgerPanel } from "@/components/mm/OrderLedgerPanel";
 import { UnlockGate } from "@/components/mm/UnlockGate";
-import { useIdleLock } from "@/lib/security/useIdleLock";
 import { useSettingsSync } from "@/lib/security/useSettingsSync";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useBotStore } from "@/lib/store";
@@ -31,7 +30,6 @@ const Index = () => {
   const encryptedCredentials = useBotStore((s) => s.encryptedCredentials);
   const autoRefresh = useBotStore((s) => s.autoRefreshEnabled);
   const setAutoRefresh = useBotStore((s) => s.setAutoRefreshEnabled);
-  useIdleLock();
   useSettingsSync();
   const hasAnyCreds = !!credentials || !!encryptedCredentials;
 
@@ -93,7 +91,7 @@ const Index = () => {
       </Helmet>
       <UnlockGate />
       <header className="border-b border-border bg-card/50 backdrop-blur">
-        <div className="container flex items-center justify-between py-4">
+        <div className="container flex flex-wrap gap-4 items-center justify-between py-4">
           <div>
             <h1 className="text-xl font-bold tracking-tight">
               K15M AMM — Automated Market Maker for Kalshi BTC
@@ -102,7 +100,7 @@ const Index = () => {
               Avellaneda–Stoikov · Kalshi BTC 15-minute contracts · Local browser bot
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="mr-1 flex items-center gap-2 rounded-md border border-border bg-background/40 px-2.5 py-1.5">
               <RefreshCw
                 className={`h-3.5 w-3.5 ${autoRefresh ? (pollStatus.throttled ? "text-warning" : "text-success") : "text-muted-foreground"}`}

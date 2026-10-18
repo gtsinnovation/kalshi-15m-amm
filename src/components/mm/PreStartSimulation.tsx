@@ -143,7 +143,7 @@ export function PreStartSimulation({
   const utilization = balance > 0 ? (totalDollars / balance) * 100 : 0;
   const safetyLimitDollars = (balance * safetyPct) / 100;
   const exceedsSafety = balance > 0 && totalDollars > safetyLimitDollars;
-  const blocked = !sim || sim.perMarket.length === 0 || exceedsSafety;
+  const blocked = !sim || sim.perMarket.length === 0 || !Number.isFinite(balance) || balance <= 0 || exceedsSafety;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

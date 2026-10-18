@@ -73,7 +73,7 @@ export function useSettingsSync() {
       cancelled = true;
       sub.subscription.unsubscribe();
     };
-  }, [setRisk, setStrategy]);
+  }, [setRisk, setStrategy, setAutoRefreshEnabled]);
 
   // Debounced write whenever risk/strategy/prefs change (after initial load).
   useEffect(() => {

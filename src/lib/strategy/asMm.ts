@@ -289,10 +289,6 @@ export function computeFreshnessScore(
   return 0.5 * ageScore + 0.5 * spreadScore;
 }
 
-function round2(x: number): number {
-  return Math.round(x * 100) / 100;
-}
-
 /** Quote one market normally (both sides). */
 export function quoteNormal(
   m: MarketState,
@@ -306,8 +302,8 @@ export function quoteNormal(
   }
   return {
     ticker: m.ticker,
-    bidPrice: round2(c.bid),
-    askPrice: round2(c.ask),
+    bidPrice: Math.floor((c.bid + Number.EPSILON) * 100) / 100,
+    askPrice: Math.ceil((c.ask - Number.EPSILON) * 100) / 100,
     bidSize: c.size,
     askSize: c.size,
     debug: c.debug,
@@ -326,10 +322,10 @@ export function quoteWithInventoryCap(
     return { ...emptyQuote(m.ticker), debug: c.debug };
   }
   if (m.positionYes > 0) {
-    return { ticker: m.ticker, bidPrice: null, askPrice: round2(c.ask), bidSize: 0, askSize: c.size, debug: c.debug };
+    return { ticker: m.ticker, bidPrice: null, askPrice: Math.ceil((c.ask - Number.EPSILON) * 100) / 100, bidSize: 0, askSize: c.size, debug: c.debug };
   }
   if (m.positionYes < 0) {
-    return { ticker: m.ticker, bidPrice: round2(c.bid), askPrice: null, bidSize: c.size, askSize: 0, debug: c.debug };
+    return { ticker: m.ticker, bidPrice: Math.floor((c.bid + Number.EPSILON) * 100) / 100, askPrice: null, bidSize: c.size, askSize: 0, debug: c.debug };
   }
   return { ...emptyQuote(m.ticker), debug: c.debug };
 }

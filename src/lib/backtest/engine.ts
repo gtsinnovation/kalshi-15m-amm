@@ -138,7 +138,8 @@ export async function fetchBtcCandles15m(count: number): Promise<CandleBar[]> {
   // Dedup + sort oldest-first, then take the most recent `count`.
   const seen = new Map<number, CandleBar>();
   for (const c of all) seen.set(c.ts, c);
-  const sorted = Array.from(seen.values()).sort((a, b) => a.ts - b.ts);
+  const closedBefore = Math.floor(nowSec / granularity) * granularity * 1000;
+  const sorted = Array.from(seen.values()).filter(c => c.ts < closedBefore && c.ts + granularity * 1000 <= closedBefore && [c.open, c.close, c.high, c.low].every(v => Number.isFinite(v) && v > 0)).sort((a, b) => a.ts - b.ts);
   return sorted.slice(-count);
 }
 
@@ -151,7 +152,7 @@ export function runBacktest(
   const cycleSec = 15 * 60;
   const yearSec = 365 * 24 * 3600;
 
-  for (const bar of candles) {
+  for (const bar of candles.slice(-Math.max(0, Math.floor(params.cycles)))) {
     const open = bar.open;
     const close = bar.close;
     if (!Number.isFinite(open) || !Number.isFinite(close) || open <= 0) continue;
@@ -197,13 +198,13 @@ export function runBacktest(
       const yesPayoutCents = close >= strike ? 100 : 0;
 
       // Bid fills when we cross the synthetic ask.
-      if (ourBid >= bookAsk) {
+      if (ourBid > bookAsk) {
         const fillPriceCents = Math.round(bookAsk * 100);
         cycleFills += size;
         cyclePnlCents += (yesPayoutCents - fillPriceCents) * size;
       }
       // Ask fills (sell YES) when we cross the synthetic bid.
-      if (ourAsk <= bookBid) {
+      if (ourAsk < bookBid) {
         const fillPriceCents = Math.round(bookBid * 100);
         cycleFills += size;
         cyclePnlCents += (fillPriceCents - yesPayoutCents) * size;
@@ -243,7 +244,8 @@ function summarize(cycles: CycleResult[]): BacktestSummary {
   const pnls = cycles.map((c) => c.pnlCents / 100);
   const fills = cycles.reduce((a, c) => a + c.fills, 0);
   const pnlDollars = pnls.reduce((a, b) => a + b, 0);
-  const hits = cycles.filter((c) => c.pnlCents >= 0).length;
+  const activeCycles = cycles.filter(c => c.fills > 0);
+  const hits = activeCycles.filter((c) => c.pnlCents >= 0).length;
 
   // Equity curve + max drawdown.
   let peak = 0;
@@ -267,7 +269,7 @@ function summarize(cycles: CycleResult[]): BacktestSummary {
       cycles: cycles.length,
       fills,
       pnlDollars,
-      hitRate: hits / cycles.length,
+      hitRate: activeCycles.length ? hits / activeCycles.length : 0,
       maxDrawdownDollars: maxDd,
       avgCyclePnl: mean,
       cyclePnlStdDev: std,

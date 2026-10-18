@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { useBotStore } from "@/lib/store";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
@@ -7,13 +8,14 @@ import { AlertTriangle } from "lucide-react";
 function Row({ label, value, min, max, step, onChange, format }: {
   label: string; value: number; min: number; max: number; step: number; onChange: (v: number) => void; format?: (v: number) => string;
 }) {
+  const id = useId();
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <Label className="text-sm">{label}</Label>
+        <Label id={id} className="text-sm">{label}</Label>
         <span className="font-mono text-sm text-primary">{format ? format(value) : value}</span>
       </div>
-      <Slider value={[value]} min={min} max={max} step={step} onValueChange={(v) => onChange(v[0])} />
+      <Slider aria-labelledby={id} value={[value]} min={min} max={max} step={step} onValueChange={(v) => onChange(v[0])} />
     </div>
   );
 }

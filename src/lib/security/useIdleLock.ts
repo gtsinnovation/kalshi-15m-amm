@@ -21,6 +21,7 @@ export function useIdleLock() {
     if (!encryptedCredentials || !credentials) return;
     const timeoutMs = idleLockMinutes * 60_000;
     let timer: number | null = null;
+    let deadline = Date.now() + timeoutMs;
 
     const lockNow = () => {
       const s = useBotStore.getState();
@@ -37,17 +38,22 @@ export function useIdleLock() {
       timer = window.setTimeout(lockNow, timeoutMs);
     };
 
-    const onActivity = () => reset();
+    const onActivity = () => {
+      if (Date.now() >= deadline) { lockNow(); return; }
+      deadline = Date.now() + timeoutMs;
+      reset();
+    };
+    const onVisibility = () => { if (Date.now() >= deadline) lockNow(); };
     window.addEventListener("pointermove", onActivity);
     window.addEventListener("keydown", onActivity);
-    window.addEventListener("visibilitychange", onActivity);
+    document.addEventListener("visibilitychange", onVisibility);
     reset();
 
     return () => {
       if (timer != null) window.clearTimeout(timer);
       window.removeEventListener("pointermove", onActivity);
       window.removeEventListener("keydown", onActivity);
-      window.removeEventListener("visibilitychange", onActivity);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [idleLockMinutes, encryptedCredentials, credentials]);
 }
