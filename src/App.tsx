@@ -1,3 +1,5 @@
+import { AdminControls } from '@/components/auth/AdminControls';
+import { confirmAdminMfa, clearAdminSecrets } from '@/lib/adminAuth';
 import { useIdleLock } from "@/lib/security/useIdleLock";
 import { useEffect, useState, lazy, Suspense } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -20,18 +22,28 @@ const Backtest = lazy(() => import("./pages/Backtest.tsx"));
 const queryClient = new QueryClient();
 
 function useAuthorized() {
-  // Authorized = any signed-in Lovable Cloud user. Each user supplies their
-  // own Kalshi API credentials, encrypted in their own browser vault.
   const [authorized, setAuthorized] = useState<boolean | null>(null);
+  const [revision, setRevision] = useState(0);
   useEffect(() => {
-    const evaluate = (email: string | null | undefined) => setAuthorized(!!email);
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) =>
-      evaluate(session?.user?.email),
-    );
-    supabase.auth.getSession().then(({ data: { session } }) => evaluate(session?.user?.email));
-    return () => sub.subscription.unsubscribe();
-  }, []);
-  return [authorized, setAuthorized] as const;
+    let alive = true, sequence = 0;
+    const evaluate = async () => {
+      const current = ++sequence;
+      let approved = false;
+      try { await confirmAdminMfa(); approved = true; } catch { /* Fail closed on expiry or network failure. */ }
+      if (alive && current === sequence) {
+        setAuthorized(approved);
+        if (!approved) clearAdminSecrets();
+      }
+    };
+    const { data: sub } = supabase.auth.onAuthStateChange(() => { queueMicrotask(() => { void evaluate(); }); });
+    void evaluate();
+    const timer = window.setInterval(() => { void evaluate(); }, 15000);
+    const visible = () => { if (document.visibilityState === 'visible') void evaluate(); };
+    document.addEventListener('visibilitychange', visible);
+    return () => { alive = false; sequence++; window.clearInterval(timer); sub.subscription.unsubscribe(); document.removeEventListener('visibilitychange', visible); };
+  }, [revision]);
+  const refreshAuthorization = () => setRevision(value => value + 1);
+  return [authorized, refreshAuthorization] as const;
 }
 
 function GatedHome() {
@@ -39,6 +51,7 @@ function GatedHome() {
   if (authorized) {
     return (
       <ErrorBoundary>
+        <AdminControls />
         <Suspense
           fallback={
             <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
@@ -53,7 +66,7 @@ function GatedHome() {
       </ErrorBoundary>
     );
   }
-  return <Landing onAuthorized={() => setAuthorized(true)} />;
+  return <Landing onAuthorized={() => setAuthorized()} />;
 }
 
 function gatedPage(
@@ -65,6 +78,7 @@ function gatedPage(
     if (authorized) {
       return (
         <ErrorBoundary>
+          <AdminControls />
           <Suspense
             fallback={
               <div className="flex min-h-screen items-center justify-center bg-background text-sm text-muted-foreground">
@@ -77,7 +91,7 @@ function gatedPage(
         </ErrorBoundary>
       );
     }
-    return <Landing onAuthorized={() => setAuthorized(true)} />;
+    return <Landing onAuthorized={() => setAuthorized()} />;
   };
 }
 

@@ -1,0 +1,18 @@
+# Add this block to the EXISTING gateway; do not start a second listener on 80/443.
+# On a host-installed Caddy, replace k15mamm-app:3000 with 127.0.0.1:3015.
+k15mamm.webpwa.io {
+  encode zstd gzip
+  header {
+    Strict-Transport-Security "max-age=31536000"
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy no-referrer
+    Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+    Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.coinbase.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    -Server
+  }
+  request_body {
+    max_size 64KB
+  }
+  reverse_proxy k15mamm-app:3000
+}

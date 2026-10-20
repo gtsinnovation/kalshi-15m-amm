@@ -65,7 +65,7 @@ export function SettingsPanel() {
   }, [marketReloadMinutes]);
   const [keyId, setKeyId] = useState(credentials?.keyId ?? "");
   const [pem, setPem] = useState("");
-  const [proxy, setProxy] = useState(credentials?.corsProxy ?? encryptedCredentials?.corsProxy ?? CLOUD_PROXY);
+  const proxy = CLOUD_PROXY;
   const [env, setEnv] = useState<KalshiEnv>(credentials?.env ?? encryptedCredentials?.env ?? "demo");
   const [testing, setTesting] = useState(false);
   const [pemCheck, setPemCheck] = useState<PemValidationResult | null>(null);
@@ -352,36 +352,8 @@ export function SettingsPanel() {
         />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="proxy">CORS Proxy</Label>
-        <Input
-          id="proxy"
-          value={proxy}
-          onChange={(e) => setProxy(e.target.value)}
-          className="font-mono"
-          placeholder={CLOUD_PROXY}
-        />
-        <div className="space-y-1 text-xs text-muted-foreground">
-          <p>
-            <strong>Recommended:</strong> <code className="font-mono">{CLOUD_PROXY}</code> — uses this app's built-in
-            server-side proxy (Lovable Cloud edge function). Your RSA private key never leaves the browser; only the
-            already-signed Kalshi request is relayed.
-          </p>
-          <p>
-            Public CORS proxies (corsproxy.io, codetabs, allorigins) are unreliable and frequently rate-limited or blocked
-            by Kalshi. Use them only as a fallback.
-          </p>
-          <p>
-            <strong>Self-host alternative:</strong> deploy any URL-encoding pass-through (e.g. <code className="font-mono">cors-anywhere</code>, a Cloudflare Worker) and paste its prefix here, e.g.{" "}
-            <code className="font-mono">https://my-proxy.workers.dev/?</code>. The full Kalshi URL is appended URL-encoded.
-          </p>
-        </div>
-        <div className="flex gap-2 pt-1">
-          <Button type="button" variant="default" size="sm" onClick={() => setProxy(CLOUD_PROXY)}>Use Lovable Cloud (recommended)</Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setProxy("https://corsproxy.io/?")}>Use corsproxy.io</Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setProxy("https://api.codetabs.com/v1/proxy?quest=")}>Use codetabs</Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setProxy("https://api.allorigins.win/raw?url=")}>Use allorigins</Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => setProxy("")}>Direct (no proxy)</Button>
-        </div>
+        <p className="text-sm font-medium">Authenticated server connection</p>
+        <p className="text-xs text-muted-foreground">Signed requests use this app's server. Saving settings replaces any old proxy selection. Your private key stays in your browser. This migration release supports DEMO only.</p>
       </div>
       <div className="space-y-3 rounded-md border border-border bg-background/40 p-3">
         <div className="flex items-start gap-2">

@@ -1,0 +1,11 @@
+# Apply together with compose.yaml after creating this shared gateway network.
+services:
+  app:
+    networks:
+      default:
+      gateway:
+        aliases: [k15mamm-app]
+networks:
+  gateway:
+    external: true
+    name: ${K15M_GATEWAY_NETWORK:?Set the existing gateway network name}

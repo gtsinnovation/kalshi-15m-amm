@@ -1,28 +1,19 @@
-# ---- Build stage ----
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
-
-# Install deps with bun for parity with Lovable's build
-RUN npm install -g bun@1.1.38
-
-COPY package.json bun.lock* ./
-RUN bun install --frozen-lockfile
-
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
 COPY . .
-
-# Vite reads VITE_* at build time. The Lovable Cloud values are baked into
-# the image; pass --build-arg to override for a different backend.
 ARG VITE_SUPABASE_URL
 ARG VITE_SUPABASE_PUBLISHABLE_KEY
-ARG VITE_SUPABASE_PROJECT_ID
-ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
-    VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY \
-    VITE_SUPABASE_PROJECT_ID=$VITE_SUPABASE_PROJECT_ID
-
-RUN bun run build
-
-# ---- Runtime stage: Caddy serves dist/ with auto-HTTPS ----
-FROM caddy:2.8-alpine
-COPY --from=build /app/dist /srv
-COPY Caddyfile /etc/caddy/Caddyfile
-EXPOSE 80 443
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY
+RUN npm run typecheck && npm run build
+FROM node:24-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production PORT=3000
+COPY --from=build /app/node_modules/zod ./node_modules/zod
+COPY --from=build /app/dist ./dist
+COPY server ./server
+USER node
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "server/index.mjs"]

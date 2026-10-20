@@ -83,6 +83,29 @@ export function ControlBar() {
    */
   const runPrep = async (): Promise<boolean> => {
     const s = useBotStore.getState();
+    if (!s.credentials) return false;
+    // Refresh account inputs even when market and spot data are already cached.
+    // Preflight only validates access; it does not populate the simulation store.
+    try {
+      const client = new KalshiClient(s.credentials);
+      const [balance, positions] = await Promise.all([
+        client.getBalance(),
+        client.getPositions(),
+      ]);
+      const current = useBotStore.getState();
+      if (current.credentials !== s.credentials || current.runState !== s.runState) return false;
+      if (![balance.balance, balance.portfolio_value].every(Number.isFinite) || balance.balance < 0) {
+        throw new Error("Invalid account snapshot");
+      }
+      current.setBalance(balance.balance / 100);
+      current.setPortfolioValue(balance.portfolio_value / 100);
+      current.setPositions(positions);
+    } catch (error) {
+      toast.error("Could not refresh account for simulation", {
+        description: error instanceof Error ? error.message : "Account data unavailable",
+      });
+      return false;
+    }
     const needsSpot = s.btcSpot <= 0;
     const needsMarkets = s.markets.length === 0;
     if (!needsSpot && !needsMarkets) return true;

@@ -20,8 +20,7 @@ const BASE_URLS: Record<KalshiCredentials["env"], string> = {
 export const CLOUD_PROXY = "lovable-cloud";
 
 function cloudProxyUrl(): string {
-  const base = (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "";
-  return `${base.replace(/\/$/, "")}/functions/v1/kalshi-proxy`;
+  return '/api/kalshi';
 }
 
 function sleep(ms: number): Promise<void> {
@@ -65,6 +64,7 @@ export class KalshiClient {
   constructor(private creds: KalshiCredentials, private mayMutate: () => boolean = () => true) {}
 
   private buildUrl(path: string): string {
+    if (this.creds.corsProxy?.trim() && this.creds.corsProxy.trim() !== CLOUD_PROXY) throw new Error('Only the authenticated server relay is supported');
     const fullUrl = `${BASE_URLS[this.creds.env]}${path}`;
     // Default to the built-in Lovable Cloud edge-function proxy when no
     // proxy is configured. Calling Kalshi directly from the browser is
@@ -130,7 +130,7 @@ export class KalshiClient {
         }
         const userJwt = session?.access_token;
         if (!userJwt) {
-          throw new Error("Not signed in — please sign in with Google to use the trade API.");
+          throw new Error("Not signed in — please sign in with your password and authenticator to use the trade API.");
         }
         if (anon) headers["apikey"] = anon;
         headers["Authorization"] = `Bearer ${userJwt}`;

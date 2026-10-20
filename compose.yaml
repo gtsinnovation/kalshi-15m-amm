@@ -1,0 +1,25 @@
+name: k15mamm
+services:
+  app:
+    image: k15mamm:${K15M_RELEASE_TAG:-migration-demo}
+    build:
+      context: .
+      args:
+        VITE_SUPABASE_URL: ${SUPABASE_URL:?Set SUPABASE_URL}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:?Set SUPABASE_PUBLISHABLE_KEY}
+    environment:
+      APP_ORIGIN: ${APP_ORIGIN:-https://k15mamm.webpwa.io}
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY}
+      ALLOWED_EMAILS: ${ALLOWED_EMAILS:?Set ALLOWED_EMAILS}
+    ports: ['127.0.0.1:3015:3000']
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    init: true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}

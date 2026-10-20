@@ -12,7 +12,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:audit": "node scripts/audit-regressions.cjs",
-    "typecheck": "tsc -p tsconfig.app.json --noEmit"
+    "typecheck": "tsc -p tsconfig.app.json --noEmit",
+    "start:server": "node server/index.mjs",
+    "test:server": "node --test server/*.test.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
